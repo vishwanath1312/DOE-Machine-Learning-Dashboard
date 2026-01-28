@@ -2,14 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from mpl_toolkits.mplot3d import Axes3D
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.inspection import PartialDependenceDisplay
 from sklearn.tree import plot_tree
+from scipy.interpolate import griddata
 
 # -----------------------------
 # PAGE CONFIG
@@ -78,8 +79,35 @@ def plot_roc(y_true, y_pred, ax=None, label=None):
     ax.legend()
     return ax
 
+def plot_3d_surface_scatter(grid, x_col, y_col, z_col, score_col, best_row, title):
+    fig = plt.figure(figsize=(8,6))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Scatter
+    sc = ax.scatter(grid[x_col], grid[y_col], grid[z_col], c=grid[score_col], cmap="viridis", s=50, alpha=0.6)
+    
+    # Surface interpolation
+    # Only works for 2D surface, we fix z_col (e.g., ProbeTime) to median
+    z_fixed = grid[z_col].median()
+    mask = np.isclose(grid[z_col], z_fixed)
+    xi = np.linspace(grid[x_col].min(), grid[x_col].max(), 30)
+    yi = np.linspace(grid[y_col].min(), grid[y_col].max(), 30)
+    XI, YI = np.meshgrid(xi, yi)
+    ZI = griddata((grid[x_col][mask], grid[y_col][mask]), grid[score_col][mask], (XI, YI), method='cubic')
+    
+    ax.plot_surface(XI, YI, ZI, alpha=0.3, cmap="viridis")
+    
+    # Highlight best point
+    ax.scatter(best_row[x_col], best_row[y_col], best_row[z_col], color="red", s=120, label="Optimal", edgecolors='k')
+    
+    ax.set_xlabel(x_col); ax.set_ylabel(y_col); ax.set_zlabel(z_col)
+    ax.set_title(title)
+    ax.legend()
+    fig.colorbar(sc, ax=ax, label="Score")
+    st.pyplot(fig)
+
 # -----------------------------
-# LOAD FLOWCHART IMAGE
+# FLOWCHART IMAGE
 # -----------------------------
 flowchart_path = "Flow Diagram.png"
 
@@ -116,7 +144,7 @@ with tab1:
     st.subheader("Predicted Responses")
     st.dataframe(pd.DataFrame([[ps_ee[0,0], ps_ee[0,1], cdr[0]]], columns=Y.columns), use_container_width=True)
 
-    # 3D scatter & response surface
+    # 3D Scatter + Surface
     st.subheader("3D Scatter & Response Surface")
     grid = pd.DataFrame([[g, p, t] 
          for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
@@ -132,48 +160,7 @@ with tab1:
     grid["CDR"] = cdr_model.predict(grid_fe)
     grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
     best = grid.loc[grid.Score.idxmax()]
-
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"], c=grid["Score"], cmap="viridis", s=50, alpha=0.6)
-    ax.scatter(best["GMO"], best["Poloxamer"], best["ProbeTime"], color="red", s=120, label="Optimal", edgecolors='k')
-    ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer"); ax.set_zlabel("ProbeTime")
-    ax.set_title("Forward: 3D Grid (Red = Optimal)")
-    ax.legend()
-    fig.colorbar(sc, ax=ax, label="Score")
-    st.pyplot(fig)
-
-    # PDP
-    st.subheader("Partial Dependence Plot (Particle Size vs Inputs)")
-    fig, ax = plt.subplots(figsize=(8,6))
-    PartialDependenceDisplay.from_estimator(fwd_rf.estimators_[0], X_train, ["GMO","Poloxamer","ProbeTime"], ax=ax)
-    st.pyplot(fig)
-
-    # Correlation Heatmap
-    st.subheader("Correlation Heatmap")
-    fig, ax = plt.subplots(figsize=(6,5))
-    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
-    st.pyplot(fig)
-
-    # ROC Curves
-    st.subheader("ROC Curves (Forward Prediction)")
-    fig, ax = plt.subplots(figsize=(6,5))
-    plot_roc(Y_test["ParticleSize"], fwd_rf.predict(X_test)[:,0], ax=ax, label="ParticleSize")
-    plot_roc(Y_test["Entrapment"], fwd_rf.predict(X_test)[:,1], ax=ax, label="Entrapment")
-    plot_roc(Y_test["CDR"], cdr_model.predict(X_fe.loc[X_test.index]), ax=ax, label="CDR")
-    st.pyplot(fig)
-
-    # Random Forest Tree Visualization
-    st.subheader("Random Forest Tree Visualization")
-    target_col = st.selectbox("Select Output Tree (Forward)", ["ParticleSize", "Entrapment"])
-    target_idx = {"ParticleSize":0, "Entrapment":1}[target_col]
-    estimator = fwd_rf.estimators_[target_idx]
-    tree_idx = st.slider("Select tree number", 0, len(estimator.estimators_)-1, 0)
-    single_tree = estimator.estimators_[tree_idx]
-    fig, ax = plt.subplots(figsize=(20,10))
-    plot_tree(single_tree, feature_names=X.columns, filled=True, rounded=True, fontsize=10)
-    ax.set_title(f"Random Forest Tree #{tree_idx} for {target_col} (Forward)")
-    st.pyplot(fig)
+    plot_3d_surface_scatter(grid, "GMO", "Poloxamer", "ProbeTime", "Score", best, "Forward Prediction: 3D Grid & Response Surface")
 
 # ==============================
 # TAB 2 – BACKWARD
@@ -193,8 +180,8 @@ with tab2:
     st.subheader("Predicted Formulation")
     st.dataframe(pd.DataFrame(pred_X, columns=X.columns), use_container_width=True)
 
-    # 3D Scatter
-    st.subheader("Backward: 3D Scatter & Response Surface")
+    # 3D Scatter + Surface
+    st.subheader("3D Scatter & Response Surface")
     grid_Y = pd.DataFrame(
         [[ps_i, ent_i, cdr_i] 
          for ps_i in np.linspace(Y.ParticleSize.min(), Y.ParticleSize.max(),10)
@@ -207,79 +194,18 @@ with tab2:
     grid_Y["ProbeTime"] = pred_X_grid[:,2]
     grid_Y["Score"] = grid_Y["GMO"] + grid_Y["Poloxamer"] + grid_Y["ProbeTime"]
     best_bwd = grid_Y.loc[grid_Y.Score.idxmax()]
-
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(grid_Y["GMO"], grid_Y["Poloxamer"], grid_Y["ProbeTime"], c=grid_Y["Score"], cmap="plasma", s=50, alpha=0.6)
-    ax.scatter(best_bwd["GMO"], best_bwd["Poloxamer"], best_bwd["ProbeTime"], color="red", s=120, label="Optimal", edgecolors='k')
-    ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer"); ax.set_zlabel("ProbeTime")
-    ax.set_title("Backward: 3D Grid (Red = Optimal)")
-    ax.legend()
-    fig.colorbar(sc, ax=ax, label="Score")
-    st.pyplot(fig)
-
-    # PDP
-    st.subheader("Partial Dependence Plot (Predicted GMO vs Inputs)")
-    fig, ax = plt.subplots(figsize=(8,6))
-    PartialDependenceDisplay.from_estimator(bwd_model.estimators_[0], Y_train, ["ParticleSize","Entrapment","CDR"], ax=ax)
-    st.pyplot(fig)
-
-    # Correlation Heatmap
-    st.subheader("Correlation Heatmap")
-    fig, ax = plt.subplots(figsize=(6,5))
-    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
-    st.pyplot(fig)
-
-    # ROC Curves
-    st.subheader("ROC Curves (Backward Prediction)")
-    fig, ax = plt.subplots(figsize=(6,5))
-    plot_roc(X_test["GMO"], bwd_model.predict(Y_test)[:,0], ax=ax, label="GMO")
-    plot_roc(X_test["Poloxamer"], bwd_model.predict(Y_test)[:,1], ax=ax, label="Poloxamer")
-    plot_roc(X_test["ProbeTime"], bwd_model.predict(Y_test)[:,2], ax=ax, label="ProbeTime")
-    st.pyplot(fig)
-
-    # Random Forest Tree Visualization
-    st.subheader("Random Forest Tree Visualization")
-    target_col = st.selectbox("Select Output Tree (Backward)", ["GMO", "Poloxamer", "ProbeTime"])
-    target_idx = {"GMO":0, "Poloxamer":1, "ProbeTime":2}[target_col]
-    estimator = bwd_model.estimators_[target_idx]
-    tree_idx = st.slider("Select tree number (Backward)", 0, len(estimator.estimators_)-1, 0)
-    single_tree = estimator.estimators_[tree_idx]
-    fig, ax = plt.subplots(figsize=(20,10))
-    plot_tree(single_tree, feature_names=Y.columns, filled=True, rounded=True, fontsize=10)
-    ax.set_title(f"Random Forest Tree #{tree_idx} for {target_col} (Backward)")
-    st.pyplot(fig)
+    plot_3d_surface_scatter(grid_Y, "GMO", "Poloxamer", "ProbeTime", "Score", best_bwd, "Backward Prediction: 3D Grid & Response Surface")
 
 # ==============================
 # TAB 3 – OPTIMIZATION
 # ==============================
 with tab3:
-    st.header("Optimization: 🎯 Find Optimal Formulation")
+    st.header("Optimization: Find Optimal Formulation")
     st.subheader("Forward Model Score Optimization")
     st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
 
-    # 3D scatter
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(111, projection='3d')
-    sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"], c=grid["Score"], cmap="viridis", s=50, alpha=0.6)
-    ax.scatter(best["GMO"], best["Poloxamer"], best["ProbeTime"], color="red", s=120, label="Optimal", edgecolors='k')
-    ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer"); ax.set_zlabel("ProbeTime")
-    ax.set_title("Optimization: 3D Grid (Red = Optimal)")
-    ax.legend()
-    fig.colorbar(sc, ax=ax, label="Score")
-    st.pyplot(fig)
-
-    # Random Forest Tree Visualization (Forward)
-    st.subheader("Random Forest Tree Visualization (Forward Model)")
-    target_col = st.selectbox("Select Output Tree (Optimization)", ["ParticleSize", "Entrapment"])
-    target_idx = {"ParticleSize":0, "Entrapment":1}[target_col]
-    estimator = fwd_rf.estimators_[target_idx]
-    tree_idx = st.slider("Select tree number (Optimization)", 0, len(estimator.estimators_)-1, 0)
-    single_tree = estimator.estimators_[tree_idx]
-    fig, ax = plt.subplots(figsize=(20,10))
-    plot_tree(single_tree, feature_names=X.columns, filled=True, rounded=True, fontsize=10)
-    ax.set_title(f"Random Forest Tree #{tree_idx} for {target_col} (Optimization)")
-    st.pyplot(fig)
+    # 3D Scatter + Surface
+    plot_3d_surface_scatter(grid, "GMO", "Poloxamer", "ProbeTime", "Score", best, "Optimization: 3D Grid & Response Surface")
 
 # ==============================
 # TAB 4 – FLOWCHART
