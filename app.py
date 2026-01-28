@@ -135,7 +135,7 @@ def plot_rf_tree(model, feature_names, target_name, tree_index=0):
 # -----------------------------
 # FLOWCHART IMAGE
 # -----------------------------
-flowchart_path = "/mnt/data/An_infographic-style_flowchart_diagram_illustrates.png"
+flowchart_path = "Flow Diagram.png"
 
 # -----------------------------
 # TABS
