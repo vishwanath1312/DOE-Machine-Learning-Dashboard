@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
+from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, roc_curve, auc
 from sklearn.inspection import PartialDependenceDisplay
 from sklearn.tree import plot_tree
 from scipy.spatial import cKDTree
@@ -84,7 +84,6 @@ def plot_3d_surface_scatter(df, x_col, y_col, z_col, score_col, best_row, title)
         marker=dict(size=5, color=df[score_col], colorscale='Viridis', opacity=0.6),
         name='Grid Points'
     ))
-    # Surface (nearest neighbor)
     xi = np.linspace(df[x_col].min(), df[x_col].max(), 30)
     yi = np.linspace(df[y_col].min(), df[y_col].max(), 30)
     XI, YI = np.meshgrid(xi, yi)
@@ -92,12 +91,9 @@ def plot_3d_surface_scatter(df, x_col, y_col, z_col, score_col, best_row, title)
     ZI = np.array([df[score_col].values[tree.query([xi_, yi_])[1]] for xi_, yi_ in zip(np.ravel(XI), np.ravel(YI))])
     ZI = ZI.reshape(XI.shape)
     fig.add_trace(go.Surface(x=XI, y=YI, z=ZI, opacity=0.4, colorscale='Viridis', name='Response Surface'))
-    # Highlight optimal
     fig.add_trace(go.Scatter3d(
         x=[best_row[x_col]], y=[best_row[y_col]], z=[best_row[z_col]],
-        mode='markers',
-        marker=dict(size=10, color='red'),
-        name='Optimal'
+        mode='markers', marker=dict(size=10, color='red'), name='Optimal'
     ))
     fig.update_layout(scene=dict(xaxis_title=x_col, yaxis_title=y_col, zaxis_title=z_col), title=title)
     st.plotly_chart(fig, use_container_width=True)
@@ -116,19 +112,23 @@ def plot_pdp(model, X_data, feature, target_name):
 
 def plot_rf_tree(model, feature_names, target_name, tree_index=0):
     """
-    Compatible with sklearn >=1.3
+    Fully compatible with sklearn >=1.3 and MultiOutputRegressor
     """
-    if hasattr(model, "estimators_"):  # MultiOutputRegressor
-        tree = model.estimators_[tree_index]
+    # Unwrap MultiOutputRegressor
+    if hasattr(model, "estimators_"):
+        if isinstance(model.estimators_, list):
+            tree = model.estimators_[tree_index]
+        else:
+            tree = model.estimators_
     else:
-        tree = model  # single estimator
+        tree = model
 
-    # Ensure feature_names match
+    # Match feature names
     if hasattr(tree, "n_features_in_") and len(feature_names) != tree.n_features_in_:
         feature_names = [f"X{i}" for i in range(tree.n_features_in_)]
 
-    fig, ax = plt.subplots(figsize=(20, 10))
-    plot_tree(tree, feature_names=feature_names, filled=True, rounded=True, fontsize=10)
+    fig, ax = plt.subplots(figsize=(20,10))
+    plot_tree(tree, feature_names=feature_names, filled=True, rounded=True)
     ax.set_title(f"Random Forest Tree for {target_name}")
     st.pyplot(fig)
 
@@ -167,7 +167,7 @@ with tab1:
     st.subheader("Predicted Responses")
     st.dataframe(pd.DataFrame([[ps_ee[0,0], ps_ee[0,1], cdr[0]]], columns=Y.columns), use_container_width=True)
 
-    # 3D Surface & Scatter
+    # 3D surface + scatter
     grid = pd.DataFrame([[g, p, t] 
          for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
          for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
@@ -176,9 +176,9 @@ with tab1:
     grid_fe = grid.copy()
     grid_fe["GMO_x_ProbeTime"] = grid["GMO"] * grid["ProbeTime"]
     grid_fe["Poloxamer_x_ProbeTime"] = grid["Poloxamer"] * grid["ProbeTime"]
-    ps_ee = fwd_rf.predict(grid)
-    grid["ParticleSize"] = ps_ee[:,0]
-    grid["Entrapment"] = ps_ee[:,1]
+    ps_ee_grid = fwd_rf.predict(grid)
+    grid["ParticleSize"] = ps_ee_grid[:,0]
+    grid["Entrapment"] = ps_ee_grid[:,1]
     grid["CDR"] = cdr_model.predict(grid_fe)
     grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
     best = grid.loc[grid.Score.idxmax()]
@@ -195,12 +195,12 @@ with tab1:
     for feat in X_fe.columns[:-2]:
         plot_pdp(cdr_model, X_fe, feat, "CDR")
 
-    # Correlation Heatmaps
+    # Correlation heatmaps
     st.subheader("Correlation Heatmaps")
     plot_correlation_heatmap(X, "X Features Correlation")
     plot_correlation_heatmap(Y, "Y Features Correlation")
 
-    # ROC Curves
+    # ROC curves
     st.subheader("ROC Curves")
     plot_roc(Y_test["ParticleSize"], fwd_rf.predict(X_test)[:,0], "ParticleSize ROC")
     plot_roc(Y_test["Entrapment"], fwd_rf.predict(X_test)[:,1], "Entrapment ROC")
@@ -229,7 +229,7 @@ with tab2:
     st.subheader("Predicted Formulation")
     st.dataframe(pd.DataFrame(pred_X, columns=X.columns), use_container_width=True)
 
-    # 3D Surface & Scatter
+    # 3D surface + scatter
     grid_Y = pd.DataFrame(
         [[ps_i, ent_i, cdr_i] 
          for ps_i in np.linspace(Y.ParticleSize.min(), Y.ParticleSize.max(),10)
@@ -252,12 +252,12 @@ with tab2:
         for feat in Y.columns:
             plot_pdp(model, Y_train, feat, target)
 
-    # Correlation Heatmaps
+    # Correlation heatmaps
     st.subheader("Correlation Heatmaps")
     plot_correlation_heatmap(X, "X Features Correlation")
     plot_correlation_heatmap(Y, "Y Features Correlation")
 
-    # ROC Curves
+    # ROC curves
     st.subheader("ROC Curves")
     pred_X_test = bwd_model.predict(Y_test)
     plot_roc(X_test["GMO"], pred_X_test[:,0], "GMO ROC")
@@ -279,7 +279,7 @@ with tab3:
     st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
     plot_3d_surface_scatter(grid, "GMO", "Poloxamer", "ProbeTime", "Score", best, "Optimization 3D Surface & Scatter")
 
-    # PDPs for all outputs
+    # PDPs
     st.subheader("Partial Dependence Plots (All Outputs)")
     for target, model in zip(["ParticleSize", "Entrapment"], fwd_rf.estimators_):
         st.markdown(f"**PDPs for {target}**")
@@ -290,8 +290,8 @@ with tab3:
 
     # ROC curves
     st.subheader("ROC Curves")
-    plot_roc(Y["ParticleSize"], ps_ee[:,0], "ParticleSize ROC (Grid)")
-    plot_roc(Y["Entrapment"], ps_ee[:,1], "Entrapment ROC (Grid)")
+    plot_roc(Y["ParticleSize"], ps_ee_grid[:,0], "ParticleSize ROC (Grid)")
+    plot_roc(Y["Entrapment"], ps_ee_grid[:,1], "Entrapment ROC (Grid)")
     plot_roc(Y["CDR"], cdr_model.predict(grid_fe), "CDR ROC (Grid)")
 
     # Random Forest Trees
