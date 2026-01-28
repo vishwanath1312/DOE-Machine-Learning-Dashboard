@@ -118,7 +118,7 @@ def plot_pdp(model, X_data, feature, target_name):
 # -----------------------------
 # FLOWCHART IMAGE
 # -----------------------------
-flowchart_path = "/mnt/data/An_infographic-style_flowchart_diagram_illustrates.png"
+flowchart_path = "Flow Diagram.png"
 
 # -----------------------------
 # TABS
