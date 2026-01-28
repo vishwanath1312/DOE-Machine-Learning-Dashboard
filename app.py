@@ -14,17 +14,17 @@ from sklearn.metrics import (
     precision_score, recall_score, f1_score,
     confusion_matrix, ConfusionMatrixDisplay
 )
-from sklearn.inspection import plot_partial_dependence
+from sklearn.inspection import PartialDependenceDisplay
 
-# -------------------------------------------------
+# -----------------------------
 # PAGE CONFIG
-# -------------------------------------------------
+# -----------------------------
 st.set_page_config(page_title="DOE ML Dashboard", layout="wide")
 st.title("🔬 DOE + Machine Learning Dashboard")
 
-# -------------------------------------------------
+# -----------------------------
 # LOAD DATA
-# -------------------------------------------------
+# -----------------------------
 @st.cache_data
 def load_data(file="doe.xlsx"):
     df = pd.read_excel(file)
@@ -40,38 +40,29 @@ X_fe = X.copy()
 X_fe["GMO_x_ProbeTime"] = X["GMO"] * X["ProbeTime"]
 X_fe["Poloxamer_x_ProbeTime"] = X["Poloxamer"] * X["ProbeTime"]
 
-# -------------------------------------------------
+# -----------------------------
 # TRAIN MODELS
-# -------------------------------------------------
+# -----------------------------
 @st.cache_resource
 def train_models():
     X_tr, X_te, Y_tr, Y_te = train_test_split(X, Y, test_size=0.2, random_state=42)
 
-    # Forward model for Particle Size + Entrapment
-    fwd_rf = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=300, random_state=42)
-    )
+    fwd_rf = MultiOutputRegressor(RandomForestRegressor(n_estimators=300, random_state=42))
     fwd_rf.fit(X_tr, Y_tr[["ParticleSize", "Entrapment"]])
 
-    # Dedicated CDR model
-    cdr_model = GradientBoostingRegressor(
-        n_estimators=400, learning_rate=0.03, max_depth=3, random_state=42
-    )
+    cdr_model = GradientBoostingRegressor(n_estimators=400, learning_rate=0.03, max_depth=3, random_state=42)
     cdr_model.fit(X_fe.loc[X_tr.index], Y_tr["CDR"])
 
-    # Backward model
-    bwd_model = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=300, random_state=42)
-    )
+    bwd_model = MultiOutputRegressor(RandomForestRegressor(n_estimators=300, random_state=42))
     bwd_model.fit(Y_tr, X_tr)
 
     return fwd_rf, cdr_model, bwd_model, X_tr, X_te, Y_tr, Y_te
 
 fwd_rf, cdr_model, bwd_model, X_train, X_test, Y_train, Y_test = train_models()
 
-# -------------------------------------------------
+# -----------------------------
 # HELPER FUNCTIONS
-# -------------------------------------------------
+# -----------------------------
 def classification_metrics(y_true, y_pred):
     thr = np.median(y_true)
     yt = (y_true >= thr).astype(int)
@@ -103,14 +94,14 @@ def get_cm_labels(name):
     }
     return labels.get(name, ["Low", "High"])
 
-# -------------------------------------------------
+# -----------------------------
 # TABS
-# -------------------------------------------------
+# -----------------------------
 tab1, tab2, tab3 = st.tabs(["🔁 Forward Prediction", "🔄 Backward Prediction", "⚙ Optimization"])
 
-# =================================================
+# ==============================
 # TAB 1 – FORWARD
-# =================================================
+# ==============================
 with tab1:
     st.subheader("Formulation → Responses")
     c1, c2, c3 = st.columns(3)
@@ -173,9 +164,17 @@ with tab1:
     sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
     st.pyplot(fig)
 
-# =================================================
+    # Partial Dependence Plot
+    st.subheader("Partial Dependence Plot (Particle Size vs Inputs)")
+    fig, ax = plt.subplots(figsize=(8,6))
+    PartialDependenceDisplay.from_estimator(
+        fwd_rf.estimators_[0], X_train, ["GMO", "Poloxamer", "ProbeTime"], ax=ax
+    )
+    st.pyplot(fig)
+
+# ==============================
 # TAB 2 – BACKWARD
-# =================================================
+# ==============================
 with tab2:
     st.subheader("Responses → Formulation")
     c1, c2, c3 = st.columns(3)
@@ -190,7 +189,6 @@ with tab2:
     pred_X = bwd_model.predict(user_Y)
     st.dataframe(pd.DataFrame(pred_X, columns=X.columns), use_container_width=True)
 
-    # Backward Performance
     preds_test = bwd_model.predict(Y_test)
     rows = []
     for i, col in enumerate(X.columns):
@@ -199,14 +197,13 @@ with tab2:
         rows.append([col, mse, p, r, f1])
     st.dataframe(pd.DataFrame(rows, columns=["Parameter", "MSE", "Precision", "Recall", "F1"]), use_container_width=True)
 
-# =================================================
+# ==============================
 # TAB 3 – OPTIMIZATION
-# =================================================
+# ==============================
 with tab3:
     st.subheader("🎯 Optimal Formulation & Visualization")
 
     if st.button("Compute Optimal Formulation"):
-        # Generate grid
         grid = pd.DataFrame(
             [[g, p, t] 
              for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
@@ -223,8 +220,8 @@ with tab3:
         grid["ParticleSize"] = ps_ee[:,0]
         grid["Entrapment"] = ps_ee[:,1]
         grid["CDR"] = cdr_model.predict(grid_fe)
-
         grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
+
         best = grid.loc[grid.Score.idxmax()]
         st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
 
