@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.interpolate import griddata
 
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
@@ -11,6 +14,7 @@ from sklearn.metrics import (
     precision_score, recall_score, f1_score,
     confusion_matrix, ConfusionMatrixDisplay
 )
+from sklearn.inspection import plot_partial_dependence
 
 # -------------------------------------------------
 # PAGE CONFIG
@@ -55,7 +59,7 @@ def train_models():
     )
     cdr_model.fit(X_fe.loc[X_tr.index], Y_tr["CDR"])
 
-    # Backward model (responses → formulation)
+    # Backward model
     bwd_model = MultiOutputRegressor(
         RandomForestRegressor(n_estimators=300, random_state=42)
     )
@@ -104,13 +108,12 @@ def get_cm_labels(name):
 # -------------------------------------------------
 tab1, tab2, tab3 = st.tabs(["🔁 Forward Prediction", "🔄 Backward Prediction", "⚙ Optimization"])
 
-# =========================
+# =================================================
 # TAB 1 – FORWARD
-# =========================
+# =================================================
 with tab1:
     st.subheader("Formulation → Responses")
     c1, c2, c3 = st.columns(3)
-
     with c1:
         gmo = st.number_input("GMO (%)", float(X.GMO.min()), float(X.GMO.max()), float(X.GMO.mean()))
     with c2:
@@ -125,15 +128,14 @@ with tab1:
 
     ps_ee = fwd_rf.predict(user_X)
     cdr = cdr_model.predict(user_X_fe)
-
     st.dataframe(pd.DataFrame([[ps_ee[0,0], ps_ee[0,1], cdr[0]]], columns=Y.columns), use_container_width=True)
 
+    # ---------- MODEL PERFORMANCE ----------
     st.markdown("---")
     st.subheader("📊 Model Performance")
     ps_ee_test = fwd_rf.predict(X_test)
     cdr_test = cdr_model.predict(X_fe.loc[X_test.index])
 
-    # Performance Table
     rows = []
     for i, col in enumerate(["ParticleSize", "Entrapment"]):
         mse = mean_squared_error(Y_test[col], ps_ee_test[:, i])
@@ -160,9 +162,20 @@ with tab1:
     ConfusionMatrixDisplay(cm, display_labels=get_cm_labels(target)).plot(ax=ax, cmap="Blues")
     st.pyplot(fig)
 
-# =========================
+    # Pairplot
+    st.subheader("Pairwise Relationships")
+    fig = sns.pairplot(df)
+    st.pyplot(fig)
+
+    # Correlation Heatmap
+    st.subheader("Correlation Heatmap")
+    fig, ax = plt.subplots(figsize=(8,6))
+    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+
+# =================================================
 # TAB 2 – BACKWARD
-# =========================
+# =================================================
 with tab2:
     st.subheader("Responses → Formulation")
     c1, c2, c3 = st.columns(3)
@@ -186,18 +199,22 @@ with tab2:
         rows.append([col, mse, p, r, f1])
     st.dataframe(pd.DataFrame(rows, columns=["Parameter", "MSE", "Precision", "Recall", "F1"]), use_container_width=True)
 
-# =========================
+# =================================================
 # TAB 3 – OPTIMIZATION
-# =========================
+# =================================================
 with tab3:
-    st.subheader("🎯 Optimal Formulation")
+    st.subheader("🎯 Optimal Formulation & Visualization")
+
     if st.button("Compute Optimal Formulation"):
+        # Generate grid
         grid = pd.DataFrame(
-            [[g, p, t] for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
-                        for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
-                        for t in np.linspace(X.ProbeTime.min(), X.ProbeTime.max(), 10)],
+            [[g, p, t] 
+             for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
+             for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
+             for t in np.linspace(X.ProbeTime.min(), X.ProbeTime.max(), 10)],
             columns=X.columns
         )
+
         grid_fe = grid.copy()
         grid_fe["GMO_x_ProbeTime"] = grid["GMO"] * grid["ProbeTime"]
         grid_fe["Poloxamer_x_ProbeTime"] = grid["Poloxamer"] * grid["ProbeTime"]
@@ -210,3 +227,40 @@ with tab3:
         grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
         best = grid.loc[grid.Score.idxmax()]
         st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
+
+        # 3D Scatter Plot
+        fig = plt.figure(figsize=(9,6))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"],
+                        c=grid["Score"], cmap='viridis', s=50, alpha=0.6)
+        plt.colorbar(sc, ax=ax, label="Score")
+        ax.scatter(best["GMO"], best["Poloxamer"], best["ProbeTime"],
+                   color='red', s=120, label='Optimal', edgecolors='k')
+        ax.set_xlabel("GMO (%)"); ax.set_ylabel("Poloxamer (%)"); ax.set_zlabel("Probe Time (min)")
+        ax.set_title("3D Optimization Grid (Red = Optimal)")
+        ax.legend()
+        st.pyplot(fig)
+
+        # Response Surface / Contour Plot
+        probe_fixed = best["ProbeTime"]
+        df_slice = grid[np.isclose(grid["ProbeTime"], probe_fixed)]
+        GMO_grid, Polox_grid = np.meshgrid(
+            np.linspace(df_slice["GMO"].min(), df_slice["GMO"].max(), 50),
+            np.linspace(df_slice["Poloxamer"].min(), df_slice["Poloxamer"].max(), 50)
+        )
+        Score_grid = griddata(df_slice[["GMO","Poloxamer"]], df_slice["Score"], (GMO_grid, Polox_grid), method='cubic')
+        fig, ax = plt.subplots()
+        contour = ax.contourf(GMO_grid, Polox_grid, Score_grid, cmap='viridis')
+        fig.colorbar(contour, ax=ax, label="Score")
+        ax.set_xlabel("GMO (%)"); ax.set_ylabel("Poloxamer (%)")
+        ax.set_title(f"Response Surface of Score (ProbeTime={probe_fixed:.1f} min)")
+        st.pyplot(fig)
+
+        # Bubble Plot
+        fig, ax = plt.subplots()
+        scatter = ax.scatter(grid["GMO"], grid["Poloxamer"], s=grid["Score"]*10,
+                             c=grid["CDR"], cmap="viridis", alpha=0.7)
+        plt.colorbar(scatter, ax=ax, label="CDR")
+        ax.set_xlabel("GMO (%)"); ax.set_ylabel("Poloxamer (%)")
+        ax.set_title("Bubble Plot: Score & CDR")
+        st.pyplot(fig)
