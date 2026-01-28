@@ -9,7 +9,7 @@ from scipy.interpolate import griddata
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.inspection import PartialDependenceDisplay
 
 # -----------------------------
@@ -70,6 +70,20 @@ def compute_confusion(y_true, y_pred):
     yt = (y_true >= thr).astype(int)
     yp = (y_pred >= thr).astype(int)
     return confusion_matrix(yt, yp)
+
+def plot_roc(y_true, y_pred, ax=None, label=None):
+    thr = np.median(y_true)
+    yt = (y_true >= thr).astype(int)
+    fpr, tpr, _ = roc_curve(yt, y_pred)
+    roc_auc = auc(fpr, tpr)
+    if ax is None:
+        fig, ax = plt.subplots()
+    ax.plot(fpr, tpr, label=f'{label} (AUC={roc_auc:.2f})')
+    ax.plot([0,1],[0,1],'k--')
+    ax.set_xlabel("FPR"); ax.set_ylabel("TPR")
+    ax.set_title("ROC Curve")
+    ax.legend()
+    return ax
 
 # -----------------------------
 # TABS
@@ -150,6 +164,13 @@ with tab1:
     sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
     st.pyplot(fig)
 
+    # ROC Curves
+    st.subheader("ROC Curves (Forward Prediction)")
+    fig, ax = plt.subplots(figsize=(6,5))
+    plot_roc(Y_test["ParticleSize"], fwd_rf.predict(X_test)[:,0], ax=ax, label="ParticleSize")
+    plot_roc(Y_test["Entrapment"], fwd_rf.predict(X_test)[:,1], ax=ax, label="Entrapment")
+    plot_roc(Y_test["CDR"], cdr_model.predict(X_fe.loc[X_test.index]), ax=ax, label="CDR")
+    st.pyplot(fig)
 
 # ==============================
 # TAB 2 – BACKWARD
@@ -218,38 +239,10 @@ with tab2:
     sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
     st.pyplot(fig)
 
-
-# ==============================
-# TAB 3 – OPTIMIZATION
-# ==============================
-with tab3:
-    st.subheader("🎯 Optimal Formulation & Visualization")
-    if st.button("Compute Optimal Formulation"):
-        grid = pd.DataFrame(
-            [[g, p, t] 
-             for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
-             for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
-             for t in np.linspace(X.ProbeTime.min(), X.ProbeTime.max(), 10)],
-            columns=X.columns
-        )
-        grid_fe = grid.copy()
-        grid_fe["GMO_x_ProbeTime"] = grid["GMO"] * grid["ProbeTime"]
-        grid_fe["Poloxamer_x_ProbeTime"] = grid["Poloxamer"] * grid["ProbeTime"]
-        ps_ee = fwd_rf.predict(grid)
-        grid["ParticleSize"] = ps_ee[:,0]
-        grid["Entrapment"] = ps_ee[:,1]
-        grid["CDR"] = cdr_model.predict(grid_fe)
-        grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
-        best = grid.loc[grid.Score.idxmax()]
-        st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
-
-        # 3D scatter plot
-        fig = plt.figure(figsize=(8,6))
-        ax = fig.add_subplot(111, projection='3d')
-        sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"], c=grid["Score"], cmap="viridis", s=50, alpha=0.6)
-        ax.scatter(best["GMO"], best["Poloxamer"], best["ProbeTime"], color="red", s=120, label="Optimal", edgecolors='k')
-        ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer"); ax.set_zlabel("ProbeTime")
-        ax.set_title("Optimization 3D Grid")
-        ax.legend()
-        fig.colorbar(sc, ax=ax, label="Score")
-        st.pyplot(fig)
+    # ROC Curves
+    st.subheader("ROC Curves (Backward Prediction)")
+    fig, ax = plt.subplots(figsize=(6,5))
+    plot_roc(X_test["GMO"], bwd_model.predict(Y_test)[:,0], ax=ax, label="GMO")
+    plot_roc(X_test["Poloxamer"], bwd_model.predict(Y_test)[:,1], ax=ax, label="Poloxamer")
+    plot_roc(X_test["ProbeTime"], bwd_model.predict(Y_test)[:,2], ax=ax, label="ProbeTime")
+    st.pyplot(fig)
