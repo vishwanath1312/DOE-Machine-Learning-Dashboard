@@ -10,6 +10,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 from sklearn.inspection import PartialDependenceDisplay
 from sklearn.tree import plot_tree
+from scipy.spatial import cKDTree
 
 # -----------------------------
 # PAGE CONFIG
@@ -64,15 +65,15 @@ def classification_metrics(y_true, y_pred):
     yp = (y_pred >= thr).astype(int)
     return precision_score(yt, yp, zero_division=0), recall_score(yt, yp, zero_division=0), f1_score(yt, yp, zero_division=0)
 
-def plot_roc(y_true, y_pred, label=None):
+def plot_roc(y_true, y_pred, title="ROC Curve"):
     thr = np.median(y_true)
     yt = (y_true >= thr).astype(int)
     fpr, tpr, _ = roc_curve(yt, y_pred)
     roc_auc = auc(fpr, tpr)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f'{label} (AUC={roc_auc:.2f})'))
+    fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f"AUC={roc_auc:.2f}"))
     fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode='lines', line=dict(dash='dash', color='black')))
-    fig.update_layout(title='ROC Curve', xaxis_title='FPR', yaxis_title='TPR')
+    fig.update_layout(title=title, xaxis_title='False Positive Rate', yaxis_title='True Positive Rate')
     st.plotly_chart(fig)
 
 def plot_3d_surface_scatter(df, x_col, y_col, z_col, score_col, best_row, title):
@@ -83,17 +84,15 @@ def plot_3d_surface_scatter(df, x_col, y_col, z_col, score_col, best_row, title)
         marker=dict(size=5, color=df[score_col], colorscale='Viridis', opacity=0.6),
         name='Grid Points'
     ))
-    z_fixed = df[z_col].median()
-    mask = np.isclose(df[z_col], z_fixed)
+    # Surface (nearest neighbor)
     xi = np.linspace(df[x_col].min(), df[x_col].max(), 30)
     yi = np.linspace(df[y_col].min(), df[y_col].max(), 30)
     XI, YI = np.meshgrid(xi, yi)
-    # nearest neighbor for robustness
-    from scipy.spatial import cKDTree
     tree = cKDTree(df[[x_col, y_col]].values)
-    ZI = np.array([df[score_col].values[tree.query([xi, yi])[1]] for xi, yi in zip(np.ravel(XI), np.ravel(YI))])
+    ZI = np.array([df[score_col].values[tree.query([xi_, yi_])[1]] for xi_, yi_ in zip(np.ravel(XI), np.ravel(YI))])
     ZI = ZI.reshape(XI.shape)
     fig.add_trace(go.Surface(x=XI, y=YI, z=ZI, opacity=0.4, colorscale='Viridis', name='Response Surface'))
+    # Highlight optimal
     fig.add_trace(go.Scatter3d(
         x=[best_row[x_col]], y=[best_row[y_col]], z=[best_row[z_col]],
         mode='markers',
@@ -115,10 +114,20 @@ def plot_pdp(model, X_data, feature, target_name):
     ax.set_title(f"PDP: {target_name} vs {feature}")
     st.pyplot(fig)
 
+def plot_rf_tree(model, feature_names, target_name, tree_index=0):
+    if hasattr(model, "estimators_"):  # MultiOutputRegressor
+        tree = model.estimators_[tree_index]
+    else:
+        tree = model
+    fig, ax = plt.subplots(figsize=(20,10))
+    plot_tree(tree, feature_names=feature_names, filled=True, rounded=True, fontsize=10)
+    ax.set_title(f"Random Forest Tree for {target_name}")
+    st.pyplot(fig)
+
 # -----------------------------
 # FLOWCHART IMAGE
 # -----------------------------
-flowchart_path = "Flow Diagram.png"
+flowchart_path = "/mnt/data/An_infographic-style_flowchart_diagram_illustrates.png"
 
 # -----------------------------
 # TABS
@@ -168,20 +177,34 @@ with tab1:
 
     plot_3d_surface_scatter(grid, "GMO", "Poloxamer", "ProbeTime", "Score", best, "Forward Prediction 3D Surface & Scatter")
 
-    # PDPs for all three outputs
-    st.subheader("Partial Dependence Plots (All Responses)")
+    # PDPs
+    st.subheader("Partial Dependence Plots")
     for target, model in zip(["ParticleSize", "Entrapment"], fwd_rf.estimators_):
         st.markdown(f"**PDPs for {target}**")
         for feat in X.columns:
             plot_pdp(model, X_train, feat, target)
     st.markdown(f"**PDPs for CDR**")
-    for feat in X_fe.columns[:-2]:  # Original X features only
+    for feat in X_fe.columns[:-2]:
         plot_pdp(cdr_model, X_fe, feat, "CDR")
 
-    # Correlation heatmaps
+    # Correlation Heatmaps
     st.subheader("Correlation Heatmaps")
-    plot_correlation_heatmap(X, "X Features (Formulation) Correlation")
-    plot_correlation_heatmap(Y, "Y Features (Responses) Correlation")
+    plot_correlation_heatmap(X, "X Features Correlation")
+    plot_correlation_heatmap(Y, "Y Features Correlation")
+
+    # ROC Curves
+    st.subheader("ROC Curves")
+    plot_roc(Y_test["ParticleSize"], fwd_rf.predict(X_test)[:,0], "ParticleSize ROC")
+    plot_roc(Y_test["Entrapment"], fwd_rf.predict(X_test)[:,1], "Entrapment ROC")
+    plot_roc(Y_test["CDR"], cdr_model.predict(X_fe.loc[X_test.index]), "CDR ROC")
+
+    # Random Forest Trees
+    st.subheader("Random Forest Trees")
+    for i, target in enumerate(["ParticleSize", "Entrapment"]):
+        st.markdown(f"**Tree for {target}**")
+        plot_rf_tree(fwd_rf, X.columns, target, tree_index=0)
+    st.markdown("**Tree for CDR**")
+    plot_rf_tree(cdr_model, X_fe.columns, "CDR", tree_index=0)
 
 # ==============================
 # TAB 2 – BACKWARD
@@ -198,7 +221,7 @@ with tab2:
     st.subheader("Predicted Formulation")
     st.dataframe(pd.DataFrame(pred_X, columns=X.columns), use_container_width=True)
 
-    # 3D Grid & Surface
+    # 3D Surface & Scatter
     grid_Y = pd.DataFrame(
         [[ps_i, ent_i, cdr_i] 
          for ps_i in np.linspace(Y.ParticleSize.min(), Y.ParticleSize.max(),10)
@@ -214,17 +237,30 @@ with tab2:
 
     plot_3d_surface_scatter(grid_Y, "GMO", "Poloxamer", "ProbeTime", "Score", best_bwd, "Backward Prediction 3D Surface & Scatter")
 
-    # PDPs for all outputs
-    st.subheader("Partial Dependence Plots (All Responses - Backward)")
+    # PDPs
+    st.subheader("Partial Dependence Plots (Backward)")
     for target, model in zip(X.columns, bwd_model.estimators_):
         st.markdown(f"**PDPs for {target}**")
         for feat in Y.columns:
             plot_pdp(model, Y_train, feat, target)
 
-    # Correlation heatmaps
+    # Correlation Heatmaps
     st.subheader("Correlation Heatmaps")
-    plot_correlation_heatmap(X, "X Features (Formulation) Correlation")
-    plot_correlation_heatmap(Y, "Y Features (Responses) Correlation")
+    plot_correlation_heatmap(X, "X Features Correlation")
+    plot_correlation_heatmap(Y, "Y Features Correlation")
+
+    # ROC Curves
+    st.subheader("ROC Curves")
+    pred_X_test = bwd_model.predict(Y_test)
+    plot_roc(X_test["GMO"], pred_X_test[:,0], "GMO ROC")
+    plot_roc(X_test["Poloxamer"], pred_X_test[:,1], "Poloxamer ROC")
+    plot_roc(X_test["ProbeTime"], pred_X_test[:,2], "ProbeTime ROC")
+
+    # Random Forest Trees
+    st.subheader("Random Forest Trees (Backward)")
+    for i, target in enumerate(X.columns):
+        st.markdown(f"**Tree for {target}**")
+        plot_rf_tree(bwd_model, Y.columns, target, tree_index=0)
 
 # ==============================
 # TAB 3 – OPTIMIZATION
@@ -234,6 +270,29 @@ with tab3:
     st.subheader("Forward Model Optimal Score")
     st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
     plot_3d_surface_scatter(grid, "GMO", "Poloxamer", "ProbeTime", "Score", best, "Optimization 3D Surface & Scatter")
+
+    # PDPs for all outputs
+    st.subheader("Partial Dependence Plots (All Outputs)")
+    for target, model in zip(["ParticleSize", "Entrapment"], fwd_rf.estimators_):
+        st.markdown(f"**PDPs for {target}**")
+        for feat in X.columns:
+            plot_pdp(model, X_train, feat, target)
+    for feat in X_fe.columns[:-2]:
+        plot_pdp(cdr_model, X_fe, feat, "CDR")
+
+    # ROC curves
+    st.subheader("ROC Curves")
+    plot_roc(Y["ParticleSize"], ps_ee[:,0], "ParticleSize ROC (Grid)")
+    plot_roc(Y["Entrapment"], ps_ee[:,1], "Entrapment ROC (Grid)")
+    plot_roc(Y["CDR"], cdr_model.predict(grid_fe), "CDR ROC (Grid)")
+
+    # Random Forest Trees
+    st.subheader("Random Forest Trees")
+    for i, target in enumerate(["ParticleSize", "Entrapment"]):
+        st.markdown(f"**Tree for {target}**")
+        plot_rf_tree(fwd_rf, X.columns, target, tree_index=0)
+    st.markdown("**Tree for CDR**")
+    plot_rf_tree(cdr_model, X_fe.columns, "CDR", tree_index=0)
 
 # ==============================
 # TAB 4 – FLOWCHART
