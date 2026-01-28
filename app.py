@@ -115,11 +115,19 @@ def plot_pdp(model, X_data, feature, target_name):
     st.pyplot(fig)
 
 def plot_rf_tree(model, feature_names, target_name, tree_index=0):
+    """
+    Compatible with sklearn >=1.3
+    """
     if hasattr(model, "estimators_"):  # MultiOutputRegressor
         tree = model.estimators_[tree_index]
     else:
-        tree = model
-    fig, ax = plt.subplots(figsize=(20,10))
+        tree = model  # single estimator
+
+    # Ensure feature_names match
+    if hasattr(tree, "n_features_in_") and len(feature_names) != tree.n_features_in_:
+        feature_names = [f"X{i}" for i in range(tree.n_features_in_)]
+
+    fig, ax = plt.subplots(figsize=(20, 10))
     plot_tree(tree, feature_names=feature_names, filled=True, rounded=True, fontsize=10)
     ax.set_title(f"Random Forest Tree for {target_name}")
     st.pyplot(fig)
@@ -159,7 +167,7 @@ with tab1:
     st.subheader("Predicted Responses")
     st.dataframe(pd.DataFrame([[ps_ee[0,0], ps_ee[0,1], cdr[0]]], columns=Y.columns), use_container_width=True)
 
-    # 3D Grid & Surface
+    # 3D Surface & Scatter
     grid = pd.DataFrame([[g, p, t] 
          for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
          for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
