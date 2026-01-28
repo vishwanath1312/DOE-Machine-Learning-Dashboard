@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from mpl_toolkits.mplot3d import Axes3D
-from scipy.interpolate import griddata
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -80,9 +79,19 @@ def plot_roc(y_true, y_pred, ax=None, label=None):
     return ax
 
 # -----------------------------
+# LOAD FLOWCHART IMAGE
+# -----------------------------
+flowchart_path = "Flow Diagram.png"
+
+# -----------------------------
 # TABS
 # -----------------------------
-tab1, tab2, tab3 = st.tabs(["🔁 Forward Prediction", "🔄 Backward Prediction", "⚙ Optimization"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🔁 Forward Prediction",
+    "🔄 Backward Prediction",
+    "⚙ Optimization",
+    "📈 Dashboard Flowchart"
+])
 
 # ==============================
 # TAB 1 – FORWARD
@@ -271,3 +280,10 @@ with tab3:
     plot_tree(single_tree, feature_names=X.columns, filled=True, rounded=True, fontsize=10)
     ax.set_title(f"Random Forest Tree #{tree_idx} for {target_col} (Optimization)")
     st.pyplot(fig)
+
+# ==============================
+# TAB 4 – FLOWCHART
+# ==============================
+with tab4:
+    st.header("📊 DOE + ML Dashboard Flowchart")
+    st.image(flowchart_path, use_column_width=True)
