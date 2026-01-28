@@ -98,15 +98,13 @@ with tab1:
     cdr = cdr_model.predict(user_X_fe)
     st.dataframe(pd.DataFrame([[ps_ee[0,0], ps_ee[0,1], cdr[0]]], columns=Y.columns), use_container_width=True)
 
-    # ---------- 3D Scatter and Response Surface ----------
-    st.subheader("Forward Prediction: 3D Visualization & Score Surface")
-    grid = pd.DataFrame(
-        [[g, p, t] 
+    # 3D scatter & response surface
+    st.subheader("Forward: 3D Visualization & Response Surface")
+    grid = pd.DataFrame([[g, p, t] 
          for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
          for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
          for t in np.linspace(X.ProbeTime.min(), X.ProbeTime.max(), 10)],
-        columns=X.columns
-    )
+        columns=X.columns)
     grid_fe = grid.copy()
     grid_fe["GMO_x_ProbeTime"] = grid["GMO"] * grid["ProbeTime"]
     grid_fe["Poloxamer_x_ProbeTime"] = grid["Poloxamer"] * grid["ProbeTime"]
@@ -117,7 +115,6 @@ with tab1:
     grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
     best = grid.loc[grid.Score.idxmax()]
 
-    # 3D scatter plot
     fig = plt.figure(figsize=(8,6))
     ax = fig.add_subplot(111, projection='3d')
     sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"], c=grid["Score"], cmap="viridis", s=50, alpha=0.6)
@@ -141,6 +138,19 @@ with tab1:
     ax.set_title(f"Forward: Response Surface (ProbeTime={probe_fixed:.1f})")
     st.pyplot(fig)
 
+    # Partial Dependence Plot
+    st.subheader("Partial Dependence Plot (Particle Size vs Inputs)")
+    fig, ax = plt.subplots(figsize=(8,6))
+    PartialDependenceDisplay.from_estimator(fwd_rf.estimators_[0], X_train, ["GMO","Poloxamer","ProbeTime"], ax=ax)
+    st.pyplot(fig)
+
+    # Correlation Heatmap
+    st.subheader("Correlation Heatmap")
+    fig, ax = plt.subplots(figsize=(6,5))
+    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+
+
 # ==============================
 # TAB 2 – BACKWARD
 # ==============================
@@ -158,25 +168,21 @@ with tab2:
     pred_X = bwd_model.predict(user_Y)
     st.dataframe(pd.DataFrame(pred_X, columns=X.columns), use_container_width=True)
 
-    # ---------- 3D Scatter and Response Surface ----------
-    st.subheader("Backward Prediction: 3D Visualization & Score Surface")
-    # Create grid in Y-space
+    # 3D scatter & response surface
+    st.subheader("Backward: 3D Visualization & Response Surface")
     grid_Y = pd.DataFrame(
-        [[ps_i, ent_i, cdr_i]
-         for ps_i in np.linspace(Y.ParticleSize.min(), Y.ParticleSize.max(), 10)
-         for ent_i in np.linspace(Y.Entrapment.min(), Y.Entrapment.max(), 10)
-         for cdr_i in np.linspace(Y.CDR.min(), Y.CDR.max(), 10)],
-        columns=Y.columns
-    )
+        [[ps_i, ent_i, cdr_i] 
+         for ps_i in np.linspace(Y.ParticleSize.min(), Y.ParticleSize.max(),10)
+         for ent_i in np.linspace(Y.Entrapment.min(), Y.Entrapment.max(),10)
+         for cdr_i in np.linspace(Y.CDR.min(), Y.CDR.max(),10)],
+        columns=Y.columns)
     pred_X_grid = bwd_model.predict(grid_Y)
     grid_Y["GMO"] = pred_X_grid[:,0]
     grid_Y["Poloxamer"] = pred_X_grid[:,1]
     grid_Y["ProbeTime"] = pred_X_grid[:,2]
-    # Score: simple sum for demonstration
     grid_Y["Score"] = grid_Y["GMO"] + grid_Y["Poloxamer"] + grid_Y["ProbeTime"]
     best_bwd = grid_Y.loc[grid_Y.Score.idxmax()]
 
-    # 3D scatter
     fig = plt.figure(figsize=(8,6))
     ax = fig.add_subplot(111, projection='3d')
     sc = ax.scatter(grid_Y["GMO"], grid_Y["Poloxamer"], grid_Y["ProbeTime"], c=grid_Y["Score"], cmap="plasma", s=50, alpha=0.6)
@@ -199,3 +205,51 @@ with tab2:
     ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer")
     ax.set_title(f"Backward: Response Surface (CDR={cdr_fixed:.1f})")
     st.pyplot(fig)
+
+    # Partial Dependence Plot
+    st.subheader("Partial Dependence Plot (Predicted GMO vs Inputs)")
+    fig, ax = plt.subplots(figsize=(8,6))
+    PartialDependenceDisplay.from_estimator(bwd_model.estimators_[0], Y_train, ["ParticleSize","Entrapment","CDR"], ax=ax)
+    st.pyplot(fig)
+
+    # Correlation Heatmap
+    st.subheader("Correlation Heatmap")
+    fig, ax = plt.subplots(figsize=(6,5))
+    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+
+
+# ==============================
+# TAB 3 – OPTIMIZATION
+# ==============================
+with tab3:
+    st.subheader("🎯 Optimal Formulation & Visualization")
+    if st.button("Compute Optimal Formulation"):
+        grid = pd.DataFrame(
+            [[g, p, t] 
+             for g in np.linspace(X.GMO.min(), X.GMO.max(), 10)
+             for p in np.linspace(X.Poloxamer.min(), X.Poloxamer.max(), 10)
+             for t in np.linspace(X.ProbeTime.min(), X.ProbeTime.max(), 10)],
+            columns=X.columns
+        )
+        grid_fe = grid.copy()
+        grid_fe["GMO_x_ProbeTime"] = grid["GMO"] * grid["ProbeTime"]
+        grid_fe["Poloxamer_x_ProbeTime"] = grid["Poloxamer"] * grid["ProbeTime"]
+        ps_ee = fwd_rf.predict(grid)
+        grid["ParticleSize"] = ps_ee[:,0]
+        grid["Entrapment"] = ps_ee[:,1]
+        grid["CDR"] = cdr_model.predict(grid_fe)
+        grid["Score"] = -grid["ParticleSize"] + grid["Entrapment"] + grid["CDR"]
+        best = grid.loc[grid.Score.idxmax()]
+        st.dataframe(best.to_frame("Optimal Value"), use_container_width=True)
+
+        # 3D scatter plot
+        fig = plt.figure(figsize=(8,6))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(grid["GMO"], grid["Poloxamer"], grid["ProbeTime"], c=grid["Score"], cmap="viridis", s=50, alpha=0.6)
+        ax.scatter(best["GMO"], best["Poloxamer"], best["ProbeTime"], color="red", s=120, label="Optimal", edgecolors='k')
+        ax.set_xlabel("GMO"); ax.set_ylabel("Poloxamer"); ax.set_zlabel("ProbeTime")
+        ax.set_title("Optimization 3D Grid")
+        ax.legend()
+        fig.colorbar(sc, ax=ax, label="Score")
+        st.pyplot(fig)
